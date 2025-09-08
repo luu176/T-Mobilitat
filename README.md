@@ -6,6 +6,8 @@ This repository documents the ongoing reverse engineering and analysis of the T-
 
 T-Mobilitat cards are used throughout Barcelona for accessing public transit services. This repository focuses on the technical structure, communication protocols, and authentication mechanisms used by the cards and their corresponding mobile apps.
 
+**(attached is a script which acts as a reader for the CIPURSE anonymous t-mobilitat cards using their API)**
+
 The project investigates two main card types used in the T-Mobilitat system:
 
 - **Infineon CIPURSE-based cards** – Used for most card types.
