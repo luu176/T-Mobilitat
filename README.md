@@ -50,12 +50,6 @@ Before any meaningful data exchange:
 - `0x93`: Contains relevant usage or validation data
 - `0x94`: Likely contains metadata or secondary card information
 
-## Work in Progress
-
-- Reverse engineering of Infineon card communication
-- Script for reading Infineon-based T-Mobilitat cards (coming soon)
-- Analysis of session key derivation and CMAC generation
-- Dump examples and communication logs
 
 ## Disclaimer
 
