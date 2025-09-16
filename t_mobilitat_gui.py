@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-Public Transport JSON -> Decorative Tk GUI
-- Updated to present parsed JSON as a decorative UI instead of raw JSON dumps.
-- Call launch_gui(json_string) to open the Tkinter GUI showing the parsed data.
-
-Single-file drop-in replacement for the original script.
-"""
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -412,31 +405,41 @@ class PTGui(tk.Tk):
                 sf.pack(fill="x", pady=4)
                 if s.get("company_name") == "TB":
                     company_name = "Bus"
+                    ob = s.get("on_board", {})
+                    ln = ob.get("line_name")
+                    entry = ob.get("entry", {})
+                    location = entry.get("station_interop_name")
+                    try:
+                        time_of_entry = datetime.fromisoformat(
+                            entry.get("datetime")
+                        ).strftime("%B %d, %Y %I:%M %p")
+                    except:
+                        time_of_entry = "Unknown"
+                elif s.get("company_name") == "FMB":
+                    company_name = "Metro"
+                    ost = s.get("on_station", {})
+                    ln = ost.get("associated_index")
+                    entry = ost.get("entry", {})
+                    location = entry.get("station_interop_name")
+                    ln = entry.get("associated_index")
+                    try:
+                        time_of_entry = datetime.fromisoformat(
+                            entry.get("datetime")
+                        ).strftime("%B %d, %Y %I:%M %p")
+                    except:
+                        time_of_entry = "Unknown"
                 else:
                     company_name = s.get("company_name")
-                ob = s.get("on_board", {})
-                ln = ob.get("line_name")
-                entry = ob.get("entry", {})
-                location = entry.get("station_interop_name")
-                try:
-                    time_of_entry = datetime.fromisoformat(
-                        entry.get("datetime")
-                    ).strftime("%B %d, %Y %I:%M %p")
-                except:
-                    time_of_entry = "Unknown"
+                    ln = "Unknown"
+                    location = "Unknown"
+                    time_of_entry = "Unkown"
+
                 tk.Label(
                     sf,
                     text=f"Stage {s.get('index')} — {company_name}, \nLine: {ln} \nLocation: {location} \nDate/Time: {time_of_entry}",
                     font=LARGE_FONT,
                 ).pack(anchor="w")
                 on = s.get("on_station", {})
-                entry = on.get("entry")
-                if entry:
-                    tk.Label(
-                        sf,
-                        text=f"Entry station: {entry.get('station_interop_name')} @ {entry.get('datetime')}",
-                        font=LARGE_FONT,
-                    ).pack(anchor="w")
                 exit = on.get("exit")
                 if exit and exit.get("station_interop_name"):
                     tk.Label(
