@@ -5,6 +5,7 @@ from protobuf_decoder.protobuf_decoder import Parser
 from typing import Any, List, Optional, Union
 from t_mobilitat_gui import launch_gui
 
+
 def int_to_varint(n: int) -> bytes:
     b = []
     while True:
@@ -20,7 +21,9 @@ def varint_to_hex(n: int) -> str:
     return int_to_varint(n).hex()
 
 
-def get_field_by_path(proto: dict, path: Union[str, List[int]]) -> Optional[Union[Any, List[Any]]]:
+def get_field_by_path(
+    proto: dict, path: Union[str, List[int]]
+) -> Optional[Union[Any, List[Any]]]:
     if isinstance(path, str):
         parts = [int(p) for p in path.split(".") if p != ""]
     else:
@@ -84,6 +87,30 @@ class NFCSession:
             self.connection.disconnect()
             print("[*] Disconnected from card.")
 
+    def get_atr(self) -> str:
+        # many pyscard CardConnection objects provide getATR()
+        atr = bytes(self.connection.getATR())  # may raise if not supported
+        print(f"[<] ATR: {atr.hex().upper()}")
+        return atr.hex().upper()
+
+
+def atr_to_ats(atr_hex: str) -> str:
+    atr = bytes.fromhex(atr_hex)
+
+    TS = atr[0]
+    T0 = atr[1]
+    K = T0 & 0x0F  # number of historical bytes
+
+    hist_bytes = atr[-(K + 1) : -1]  # take last K bytes before TCK
+
+    # In practice, PC/SC discards the initial TL/T0 TB/TC from ATS
+    # For many readers, you have to reconstruct manually.
+    # Here we hardcode the known prefix for your card:
+    prefix = bytes.fromhex("1078736000")
+
+    ats = prefix + hist_bytes
+    return ats.hex().upper()
+
 
 # --- constants / helpers ---
 command0 = bytes.fromhex(
@@ -103,7 +130,12 @@ with httpx.Client(http2=True, verify=False) as client:
     # 1) openSession
     h = BASE_HEADERS.copy()
     h["session-id"] = "hello t-mobilitat"
-    r0 = client.post("https://motorcloud.atm.smarting.es:9032/DeviceContextService/openSession", headers=h, content=command0, timeout=10.0)
+    r0 = client.post(
+        "https://motorcloud.atm.smarting.es:9032/DeviceContextService/openSession",
+        headers=h,
+        content=command0,
+        timeout=10.0,
+    )
     r0.raise_for_status()
     sessionid = r0.content.hex()[18:90]
     print("sessionid(hex):", sessionid)
@@ -111,6 +143,9 @@ with httpx.Client(http2=True, verify=False) as client:
     # NFC session + UID
     session = NFCSession()
     carduid = session.get_uid()
+    atr = session.get_atr()
+    ats = atr_to_ats(atr)
+    print("rats:", ats)
     print("card UID:", carduid)
 
     # 2) executeDirectOperation (command1)
@@ -119,11 +154,19 @@ with httpx.Client(http2=True, verify=False) as client:
         + sessionid
         + "1801600110011a1b0a07"
         + carduid
-        + "121010787774032a26a7a1148041021bf64b2206080212020805"
+        + "1210"
+        + ats
+        + "2206080212020805"
     )
+    print("command1hex:", command1_hex)
     h2 = BASE_HEADERS.copy()
     h2["session-id"] = bytes.fromhex(sessionid).decode("utf-8")
-    r1 = client.post("https://motorcloud.atm.smarting.es:9032/SmartcardService/executeDirectOperation", headers=h2, content=bytes.fromhex(command1_hex), timeout=10.0)
+    r1 = client.post(
+        "https://motorcloud.atm.smarting.es:9032/SmartcardService/executeDirectOperation",
+        headers=h2,
+        content=bytes.fromhex(command1_hex),
+        timeout=10.0,
+    )
     r1.raise_for_status()
     print("[DEBUG] executeDirectOperation response")
 
@@ -135,25 +178,45 @@ with httpx.Client(http2=True, verify=False) as client:
     print("UUID1:", uuid1, "UUID2:", uuid2, "Num:", num)
 
     # 3) smartCardResponse #1 (cardresponse)
-    cardresponse = bytes.fromhex(
-        f"00000000{(len(num)+47):02X}0a24"
-    ) + uuid1.encode("latin1") + bytes.fromhex(
-        f"12{(len(num)+7):02X}10"
-    ) + num + bytes.fromhex("1a040a02") + bytes.fromhex("9000")
-    r2 = client.post("https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse", headers=h2, content=cardresponse, timeout=10.0)
+    cardresponse = (
+        bytes.fromhex(f"00000000{(len(num)+47):02X}0a24")
+        + uuid1.encode("latin1")
+        + bytes.fromhex(f"12{(len(num)+7):02X}10")
+        + num
+        + bytes.fromhex("1a040a02")
+        + bytes.fromhex("9000")
+    )
+    r2 = client.post(
+        "https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse",
+        headers=h2,
+        content=cardresponse,
+        timeout=10.0,
+    )
     r2.raise_for_status()
     resp2_parsed = Parser().parse(r2.content.hex()[2:])
     num = bytes.fromhex(varint_to_hex(get_field_by_path(resp2_parsed.to_dict(), "3.2")))
     print("Num (after server):", num)
 
     # APDU: select + authenticate A
-    session.send_apdu(b"\x00\xA4\x00\x00\x02\x00\x05")
+    session.send_apdu(b"\x00\xa4\x00\x00\x02\x00\x05")
     resp_apdu = session.send_apdu(b"\x00\x84\x00\x00\x16")
 
     # 4) smartCardResponse #2 (cardresponse2) with APDU response
-    cardresponse2 = bytes.fromhex(f"00000000{(2+36+3+len(num)+4+24):02X}0a24") + uuid1.encode("latin1") + bytes.fromhex(f"12{(len(num)+29):02X}10") + num + bytes.fromhex("1a1a0a18") + resp_apdu
+    cardresponse2 = (
+        bytes.fromhex(f"00000000{(2+36+3+len(num)+4+24):02X}0a24")
+        + uuid1.encode("latin1")
+        + bytes.fromhex(f"12{(len(num)+29):02X}10")
+        + num
+        + bytes.fromhex("1a1a0a18")
+        + resp_apdu
+    )
     print("command3(hex):", cardresponse2.hex())
-    r3 = client.post("https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse", headers=h2, content=cardresponse2, timeout=10.0)
+    r3 = client.post(
+        "https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse",
+        headers=h2,
+        content=cardresponse2,
+        timeout=10.0,
+    )
     r3.raise_for_status()
     print("\n" + r3.content.hex()[10:])
 
@@ -169,9 +232,21 @@ with httpx.Client(http2=True, verify=False) as client:
     resp_after_b = session.send_apdu(command_apdu)  # authenticate B
 
     # 5) smartCardResponse #3 (cardresponse3) using response from card (resp_after_b)
-    cardresponse3 = bytes.fromhex(f"00000000{(2+36+3+len(num)+4+18):02X}0a24") + uuid1.encode("latin1") + bytes.fromhex(f"12{(len(num)+23):02X}10") + num + bytes.fromhex("1a140a12") + resp_after_b
+    cardresponse3 = (
+        bytes.fromhex(f"00000000{(2+36+3+len(num)+4+18):02X}0a24")
+        + uuid1.encode("latin1")
+        + bytes.fromhex(f"12{(len(num)+23):02X}10")
+        + num
+        + bytes.fromhex("1a140a12")
+        + resp_after_b
+    )
     print("[DEBUG] command4(hex):", cardresponse3.hex())
-    r4 = client.post("https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse", headers=h2, content=cardresponse3, timeout=10.0)
+    r4 = client.post(
+        "https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse",
+        headers=h2,
+        content=cardresponse3,
+        timeout=10.0,
+    )
     r4.raise_for_status()
 
     # read files from card (keep bytes)
@@ -180,21 +255,43 @@ with httpx.Client(http2=True, verify=False) as client:
 
     # parse r4 -> numx
     resp4_parsed = Parser().parse(r4.content.hex()[10:])
-    numx = bytes.fromhex(varint_to_hex(get_field_by_path(resp4_parsed.to_dict(), "3.2")))
+    numx = bytes.fromhex(
+        varint_to_hex(get_field_by_path(resp4_parsed.to_dict(), "3.2"))
+    )
     print("[DEBUG] final num:", numx)
 
     # 6) smartCardResponse #4 (final cardresponse4) with fileread1/2
     # build body similarly to original but as bytes (kept size constants from original)
-    body = bytes.fromhex("0A24") + uuid1.encode("latin1") + bytes.fromhex("12") + int_to_varint(len(numx) + 305) + bytes.fromhex("10") + numx + bytes.fromhex("1A95010A9201") + fileread1 + bytes.fromhex("1A95010A9201") + fileread2
+    body = (
+        bytes.fromhex("0A24")
+        + uuid1.encode("latin1")
+        + bytes.fromhex("12")
+        + int_to_varint(len(numx) + 305)
+        + bytes.fromhex("10")
+        + numx
+        + bytes.fromhex("1A95010A9201")
+        + fileread1
+        + bytes.fromhex("1A95010A9201")
+        + fileread2
+    )
     cardresponse4 = b"\x00" + (len(body)).to_bytes(4, "big") + body
     print("\n[DEBUG] command5(hex):", cardresponse4.hex())
-    r5 = client.post("https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse", headers=h2, content=cardresponse4, timeout=10.0)
+    r5 = client.post(
+        "https://motorcloud.atm.smarting.es:9032/SmartcardService/smartCardResponse",
+        headers=h2,
+        content=cardresponse4,
+        timeout=10.0,
+    )
     r5.raise_for_status()
     print("\n[DEBUG] card data:", r5.content.hex())
-    data_json = Parser().parse(r5.content.hex()[10:]).to_dict()['results'][1]["data"]["results"][2]["data"]["results"][1]["data"]["results"][0]["data"]
+    data_json = (
+        Parser()
+        .parse(r5.content.hex()[10:])
+        .to_dict()["results"][1]["data"]["results"][2]["data"]["results"][1]["data"][
+            "results"
+        ][0]["data"]
+    )
     print(data_json)
     launch_gui(data_json)
-    
+
     session.disconnect()
-
-
