@@ -53,7 +53,7 @@ Before any meaningful data exchange:
 ## Key File IDs
 
 - `0x93`: Contains relevant usage and validation data
-- `0x94`: almost practically the same as the previous file for some odd reason
+- `0x94`: almost practically the same as the previous file (probably a backup file)
 
 
 ## Disclaimer
